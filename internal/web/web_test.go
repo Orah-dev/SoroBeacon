@@ -1304,6 +1304,15 @@ type deliveriesStore struct {
 func (s deliveriesStore) ListDeliveryAttempts(context.Context, int64, string) ([]store.DeliveryAttempt, error) {
 	return s.attempts, nil
 }
+
+// The fragment serves an alert that exists, so the fake has to answer the
+// existence check that keeps an unknown ID a 404 instead of an empty table.
+func (deliveriesStore) GetAlert(_ context.Context, id int64) (*store.Alert, error) {
+	if id != 1 {
+		return nil, store.ErrNotFound
+	}
+	return &store.Alert{ID: 1}, nil
+}
 func (deliveriesStore) ListChannels(context.Context, bool) ([]store.Channel, error) {
 	return []store.Channel{{ID: 7, Name: "ops-webhook"}}, nil
 }
@@ -2268,5 +2277,174 @@ func TestPagesShowRelativeTimesNextToAbsolute(t *testing.T) {
 				t.Fatalf("%s: expected a relative time next to the absolute timestamp, got:\n%s", path, html)
 			}
 		})
+	}
+}
+
+// idRouteStore answers every ID-addressed lookup with ErrNotFound, and its
+// mutating calls report ErrNotFound the way both backends do for a row that is
+// not there. That lets the unknown-ID tests below tell a handler that checks
+// before writing from one that writes first and 500s on the returned error.
+type idRouteStore struct {
+	emptyStore
+}
+
+func (*idRouteStore) GetMonitor(context.Context, int64) (*store.Monitor, error) {
+	return nil, store.ErrNotFound
+}
+func (*idRouteStore) GetRule(context.Context, int64) (*store.Rule, error) {
+	return nil, store.ErrNotFound
+}
+func (*idRouteStore) GetChannel(context.Context, int64) (*store.Channel, error) {
+	return nil, store.ErrNotFound
+}
+func (*idRouteStore) GetAlert(context.Context, int64) (*store.Alert, error) {
+	return nil, store.ErrNotFound
+}
+func (*idRouteStore) SoftDeleteMonitor(context.Context, int64) error { return store.ErrNotFound }
+func (*idRouteStore) RestoreMonitor(context.Context, int64) error    { return store.ErrNotFound }
+func (*idRouteStore) UpdateRule(context.Context, *store.Rule) error  { return store.ErrNotFound }
+func (*idRouteStore) DeleteRule(context.Context, int64) error        { return store.ErrNotFound }
+func (*idRouteStore) DeleteChannel(context.Context, int64) error     { return store.ErrNotFound }
+
+func newIDRouteServer(t *testing.T, st store.Store) *httptest.Server {
+	t.Helper()
+	s, err := New(st, rules.NewRegistry(), notify.DefaultFactory(), slog.New(slog.NewTextHandler(os.Stdout, nil)))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	srv := httptest.NewServer(s.Routes())
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// doIDRequest issues one dashboard request and returns its status without
+// following redirects, so a handler that redirected to a list page cannot be
+// mistaken for one that answered 404.
+func doIDRequest(t *testing.T, srv *httptest.Server, method, path string) int {
+	t.Helper()
+	req, err := http.NewRequest(method, srv.URL+path, nil)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer res.Body.Close()
+	if _, err := io.Copy(io.Discard, res.Body); err != nil {
+		t.Fatalf("%s %s: reading body: %v", method, path, err)
+	}
+	return res.StatusCode
+}
+
+// Every route that parses an ID out of the path must answer a non-numeric ID
+// with 404. The store is never reached, so a 500 here means the handler
+// ignored the parse error and a typo'd URL turned into a logged stack trace.
+func TestDashboardIDRoutes404OnMalformedIDs(t *testing.T) {
+	srv := newIDRouteServer(t, &idRouteStore{})
+	tests := []struct {
+		name, method, path string
+	}{
+		{"monitor detail", http.MethodGet, "/monitors/abc"},
+		{"monitor toggle", http.MethodPost, "/monitors/abc/toggle"},
+		{"monitor delete", http.MethodPost, "/monitors/abc/delete"},
+		{"monitor soft-delete alias", http.MethodPost, "/monitors/abc/soft-delete"},
+		{"monitor restore", http.MethodPost, "/monitors/abc/restore"},
+		{"rule toggle under unknown monitor", http.MethodPost, "/monitors/abc/rules/5/toggle"},
+		{"rule delete under unknown monitor", http.MethodPost, "/monitors/abc/rules/5/delete"},
+		{"rule toggle", http.MethodPost, "/monitors/1/rules/abc/toggle"},
+		{"rule delete", http.MethodPost, "/monitors/1/rules/abc/delete"},
+		{"channel edit", http.MethodGet, "/channels/abc/edit"},
+		{"channel delete", http.MethodPost, "/channels/abc/delete"},
+		{"channel test", http.MethodPost, "/channels/abc/test"},
+		{"alert detail", http.MethodGet, "/alerts/abc"},
+		{"alert deliveries", http.MethodGet, "/alerts/abc/deliveries"},
+		{"delivery retry alert id", http.MethodPost, "/alerts/abc/deliveries/7/retry"},
+		{"delivery retry channel id", http.MethodPost, "/alerts/1/deliveries/abc/retry"},
+		// Numeric but past int64: ParseInt fails with a range error, which is
+		// the same wrong-URL branch as a non-numeric ID.
+		{"id past int64 range", http.MethodGet, "/monitors/99999999999999999999"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := doIDRequest(t, srv, tt.method, tt.path); got != http.StatusNotFound {
+				t.Fatalf("%s %s = %d, want 404", tt.method, tt.path, got)
+			}
+		})
+	}
+}
+
+// The same routes must answer a well-formed but unknown ID with 404 rather
+// than a 500 from the store's ErrNotFound or an empty page that reads as a
+// real but idle resource.
+func TestDashboardIDRoutes404OnUnknownIDs(t *testing.T) {
+	srv := newIDRouteServer(t, &idRouteStore{})
+	tests := []struct {
+		name, method, path string
+	}{
+		{"monitor detail", http.MethodGet, "/monitors/99"},
+		{"monitor toggle", http.MethodPost, "/monitors/99/toggle"},
+		{"monitor delete", http.MethodPost, "/monitors/99/delete"},
+		{"monitor restore", http.MethodPost, "/monitors/99/restore"},
+		{"rule toggle", http.MethodPost, "/monitors/1/rules/99/toggle"},
+		{"rule delete", http.MethodPost, "/monitors/1/rules/99/delete"},
+		{"channel edit", http.MethodGet, "/channels/99/edit"},
+		{"channel delete", http.MethodPost, "/channels/99/delete"},
+		{"channel test", http.MethodPost, "/channels/99/test"},
+		{"alert detail", http.MethodGet, "/alerts/99"},
+		{"alert deliveries", http.MethodGet, "/alerts/99/deliveries"},
+		{"delivery retry alert id", http.MethodPost, "/alerts/99/deliveries/7/retry"},
+		{"delivery retry channel id", http.MethodPost, "/alerts/1/deliveries/99/retry"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := doIDRequest(t, srv, tt.method, tt.path); got != http.StatusNotFound {
+				t.Fatalf("%s %s = %d, want 404", tt.method, tt.path, got)
+			}
+		})
+	}
+}
+
+// crossMonitorStore serves a rule that belongs to monitor 2 while the routes
+// below address monitor 1, and records any write the ownership check should
+// have blocked.
+type crossMonitorStore struct {
+	emptyStore
+	updates int
+	deletes int
+}
+
+func (*crossMonitorStore) GetRule(context.Context, int64) (*store.Rule, error) {
+	return &store.Rule{ID: 5, MonitorID: 2, Type: "token_event"}, nil
+}
+func (s *crossMonitorStore) UpdateRule(context.Context, *store.Rule) error {
+	s.updates++
+	return nil
+}
+func (s *crossMonitorStore) DeleteRule(context.Context, int64) error {
+	s.deletes++
+	return nil
+}
+
+// The rule routes compare the rule's monitor against the one in the path. Pin
+// that: a rule reached through another monitor's URL must 404 and must not be
+// toggled or deleted, or one monitor's page could disable another's alerts.
+func TestRuleRoutesRejectRuleFromAnotherMonitor(t *testing.T) {
+	st := &crossMonitorStore{}
+	srv := newIDRouteServer(t, st)
+
+	for _, action := range []string{"toggle", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			path := "/monitors/1/rules/5/" + action
+			if got := doIDRequest(t, srv, http.MethodPost, path); got != http.StatusNotFound {
+				t.Fatalf("POST %s = %d, want 404", path, got)
+			}
+		})
+	}
+	if st.updates != 0 || st.deletes != 0 {
+		t.Fatalf("rule from another monitor was mutated: updates=%d deletes=%d", st.updates, st.deletes)
 	}
 }

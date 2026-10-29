@@ -1063,6 +1063,13 @@ func (s *Server) deleteMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.SoftDeleteMonitor(r.Context(), id); err != nil {
+		// A soft delete of a row that is not there (or is already deleted) is
+		// a wrong URL, not a server fault: the store reports it as
+		// ErrNotFound and the operator sees the same 404 as an unknown ID.
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
 		s.fail(w, err)
 		return
 	}
@@ -1077,6 +1084,12 @@ func (s *Server) restoreMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.RestoreMonitor(r.Context(), id); err != nil {
+		// Restoring something that is not in the trash is a 404 for the same
+		// reason deleting something that never existed is.
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
 		s.fail(w, err)
 		return
 	}
@@ -1927,6 +1940,18 @@ func (s *Server) alertDeliveries(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// The fragment is a view of one alert, so an ID that does not exist is a
+	// 404 like the alert's own permalink. Without this check an unknown ID
+	// renders the empty-state table, which reads as "this alert has no
+	// deliveries" — a wrong answer a typo'd URL would hide behind.
+	if _, err := s.store.GetAlert(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.fail(w, err)
+		return
+	}
 	s.writeDeliveriesFragment(w, r, id, "")
 }
 
@@ -1946,11 +1971,19 @@ func (s *Server) retryDelivery(w http.ResponseWriter, r *http.Request) {
 	}
 	alert, err := s.store.GetAlert(r.Context(), alertID)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
 		s.fail(w, err)
 		return
 	}
 	ch, err := s.store.GetChannel(r.Context(), channelID)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
 		s.fail(w, err)
 		return
 	}
