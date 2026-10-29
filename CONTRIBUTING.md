@@ -64,3 +64,12 @@ The README has worked examples for channels and rules.
 - Describe the behavior change and how you tested it.
 - New extension points should come with a short doc comment telling the next
   contributor how to use them.
+
+## Code of conduct
+
+Participation in this project is covered by the
+[Code of Conduct](CODE_OF_CONDUCT.md) (Contributor Covenant v2.1). Report
+unacceptable behavior through the route it describes rather than in a public
+issue, and read [SECURITY.md](SECURITY.md) first if the report is a
+vulnerability.
+

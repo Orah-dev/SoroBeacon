@@ -805,6 +805,12 @@ Decoded events use a small value vocabulary (`nil`, `bool`, `string`,
 
 Supported channels include [Discord](docs/channels/discord.md), [Slack](docs/channels/slack.md), [Telegram](docs/channels/telegram.md), [Matrix](docs/channels/matrix.md), [PagerDuty](docs/channels/pagerduty.md), [Twilio SMS](docs/channels/twilio.md), [Email](docs/channels/email.md), [Signal](docs/channels/signal.md), [Webex](docs/channels/webex.md), [DingTalk](docs/channels/dingtalk.md), [Google Chat](docs/channels/googlechat.md), [Opsgenie](docs/channels/opsgenie.md), [Gotify](docs/channels/gotify.md), [AWS SNS](docs/channels/sns.md), [ntfy](docs/channels/ntfy.md), and generic [Webhooks](docs/channels/webhook.md).
 
+## Code of Conduct
+
+This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md).
+Report unacceptable behavior through the route it describes; security issues go
+to [SECURITY.md](SECURITY.md) instead of a public issue.
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
