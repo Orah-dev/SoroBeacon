@@ -1363,14 +1363,15 @@ func TestToggleRuleWithMalformedIDs(t *testing.T) {
 		"/monitors/1/rules/99999999999999999/toggle",
 			http.StatusNotFound,
 			map[string]string{},
-		},
+		},		// No '#' in these paths: it starts a URL fragment, so the client would
+		// strip it and everything after it before the request is ever sent.
 		{"special chars in monitor ID",
-		"/monitors/!@#/rules/5/toggle",
+			"/monitors/!@$/rules/5/toggle",
 			http.StatusNotFound,
 			map[string]string{},
 		},
 		{"special chars in rule ID",
-		"/monitors/1/rules/!@#/toggle",
+			"/monitors/1/rules/!@$/toggle",
 			http.StatusNotFound,
 			map[string]string{},
 		},
@@ -1393,10 +1394,11 @@ func TestToggleRuleWithMalformedIDs(t *testing.T) {
 		"/monitors/1/rules/5/toggle",
 			http.StatusSeeOther,
 			map[string]string{},
-		},
-		{"1-digit rule ID",
-		"/monitors/1/rules/1/toggle",
-			http.StatusSeeOther,
+		},		// The fake store holds exactly rule 5, so rule 1 is an unknown ID.
+		// The valid 1-digit case is pinned by "1-digit monitor ID" above.
+		{"unknown 1-digit rule ID",
+			"/monitors/1/rules/1/toggle",
+			http.StatusNotFound,
 			map[string]string{},
 		},
 	}
